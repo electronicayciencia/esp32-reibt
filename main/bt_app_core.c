@@ -21,6 +21,9 @@
 #define RINGBUF_HIGHEST_WATER_LEVEL    (32 * 1024)
 #define RINGBUF_PREFETCH_WATER_LEVEL   (20 * 1024)
 
+extern uint8_t s_volume;           /* defined in bt_app_av.c*/
+
+
 enum {
     RINGBUFFER_MODE_PROCESSING,    /* ringbuffer is buffering incoming audio data, I2S is working */
     RINGBUFFER_MODE_PREFETCHING,   /* ringbuffer is buffering incoming audio data, I2S is waiting */
@@ -111,11 +114,6 @@ static void bt_i2s_task_handler(void *arg)
 {
     uint8_t *data = NULL;
     size_t item_size = 0;
-    /**
-     * The total length of DMA buffer of I2S is:
-     * `dma_frame_num * dma_desc_num * i2s_channel_num * i2s_data_bit_width / 8`.
-     * Transmit `dma_frame_num * dma_desc_num` bytes to DMA is trade-off.
-     */
     const size_t item_size_upto = 240 * 6;
     size_t bytes_written = 0;
 
@@ -123,12 +121,29 @@ static void bt_i2s_task_handler(void *arg)
         if (pdTRUE == xSemaphoreTake(s_i2s_write_semaphore, portMAX_DELAY)) {
             for (;;) {
                 item_size = 0;
-                /* receive data from ringbuffer and write it to I2S DMA transmit buffer */
                 data = (uint8_t *)xRingbufferReceiveUpTo(s_ringbuf_i2s, &item_size, (TickType_t)pdMS_TO_TICKS(20), item_size_upto);
                 if (item_size == 0) {
                     ESP_LOGI(BT_APP_CORE_TAG, "ringbuffer underflowed! mode changed: RINGBUFFER_MODE_PREFETCHING");
                     ringbuffer_mode = RINGBUFFER_MODE_PREFETCHING;
                     break;
+                }
+
+                // === Apply volume to 16-bit stereo PCM samples ===
+                if (s_volume != 100) { // Skip if full volume
+                    int16_t *samples = (int16_t *)data;
+                    size_t sample_count = item_size / sizeof(int16_t);
+
+                    for (size_t i = 0; i < sample_count; i++) {
+                        // Scale: (sample * volume) / 100
+                        int32_t scaled = ((int32_t)samples[i] * s_volume) / 100;
+                        // Clamp to 16-bit range
+                        if (scaled > 32767) {
+                            scaled = 32767;
+                        } else if (scaled < -32768) {
+                            scaled = -32768;
+                        }
+                        samples[i] = (int16_t)scaled;
+                    }
                 }
 
                 i2s_channel_write(tx_chan, data, item_size, &bytes_written, portMAX_DELAY);
