@@ -101,22 +101,6 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
         break;
     }
 
-#if (CONFIG_EXAMPLE_A2DP_SINK_SSP_ENABLED == true)
-    /* when Security Simple Pairing user confirmation requested, this event comes */
-    case ESP_BT_GAP_CFM_REQ_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %06"PRIu32, param->cfm_req.num_val);
-        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
-        break;
-    /* when Security Simple Pairing passkey notified, this event comes */
-    case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %06"PRIu32, param->key_notif.passkey);
-        break;
-    /* when Security Simple Pairing passkey requested, this event comes */
-    case ESP_BT_GAP_KEY_REQ_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_REQ_EVT Please enter passkey!");
-        break;
-#endif
-
     /* when GAP mode changed, this event comes */
     case ESP_BT_GAP_MODE_CHG_EVT:
         ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_MODE_CHG_EVT mode: %d, interval: %.2f ms",
@@ -165,22 +149,7 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         esp_a2d_register_callback(&bt_app_a2d_cb);
         assert(esp_a2d_sink_init() == ESP_OK);
 
-#if CONFIG_EXAMPLE_A2DP_SINK_USE_EXTERNAL_CODEC == FALSE
         esp_a2d_sink_register_data_callback(bt_app_a2d_data_cb);
-#else
-        esp_a2d_mcc_t mcc = {0};
-        mcc.type = ESP_A2D_MCT_SBC;
-        mcc.cie.sbc_info.samp_freq = 0xf;
-        mcc.cie.sbc_info.ch_mode = 0xf;
-        mcc.cie.sbc_info.block_len = 0xf;
-        mcc.cie.sbc_info.num_subbands = 0x3;
-        mcc.cie.sbc_info.alloc_mthd = 0x3;
-        mcc.cie.sbc_info.max_bitpool = 250;
-        mcc.cie.sbc_info.min_bitpool = 2;
-        /* register stream end point, only support mSBC currently */
-        esp_a2d_sink_register_stream_endpoint(0, &mcc);
-        esp_a2d_sink_register_audio_data_callback(bt_app_a2d_audio_data_cb);
-#endif
         /* Get the default value of the delay value */
         esp_a2d_sink_get_delay_value();
         /* Get local device name */
@@ -229,9 +198,7 @@ void app_main(void)
     }
 
     esp_bluedroid_config_t bluedroid_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
-#if (CONFIG_EXAMPLE_A2DP_SINK_SSP_ENABLED == false)
     bluedroid_cfg.ssp_en = false;
-#endif
     if ((err = esp_bluedroid_init_with_cfg(&bluedroid_cfg)) != ESP_OK) {
         ESP_LOGE(BT_AV_TAG, "%s initialize bluedroid failed: %s", __func__, esp_err_to_name(err));
         return;
@@ -241,13 +208,6 @@ void app_main(void)
         ESP_LOGE(BT_AV_TAG, "%s enable bluedroid failed: %s", __func__, esp_err_to_name(err));
         return;
     }
-
-#if (CONFIG_EXAMPLE_A2DP_SINK_SSP_ENABLED == true)
-    /* set default parameters for Secure Simple Pairing */
-    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
-    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
-#endif
 
     /* set default parameters for Legacy Pairing (use fixed pin code 1234) */
     esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;

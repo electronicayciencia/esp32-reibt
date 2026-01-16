@@ -21,11 +21,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#ifdef CONFIG_EXAMPLE_A2DP_SINK_OUTPUT_INTERNAL_DAC
-#include "driver/dac_continuous.h"
-#else
 #include "driver/i2s_std.h"
-#endif
 
 #include "sys/lock.h"
 
@@ -59,10 +55,6 @@ static void bt_i2s_driver_install(void);
 static void bt_i2s_driver_uninstall(void);
 /* set volume by remote controller */
 static void volume_set_by_controller(uint8_t volume);
-/* set volume by local host */
-static void volume_set_by_local_host(uint8_t volume);
-/* simulation volume change */
-static void volume_change_simulation(void *arg);
 /* a2dp event handler */
 static void bt_av_hdl_a2d_evt(uint16_t event, void *p_param);
 /* avrc controller event handler */
@@ -84,21 +76,10 @@ static const char *s_a2d_audio_state_str[] = {"Suspended", "Started"};
 static esp_avrc_rn_evt_cap_mask_t s_avrc_peer_rn_cap;
                                              /* AVRC target notification capability bit mask */
 static _lock_t s_volume_lock;
-static TaskHandle_t s_vcs_task_hdl = NULL;    /* handle for volume change simulation task */
 static uint8_t s_volume = 0;                 /* local volume value */
 static bool s_volume_notify;                 /* notify volume change or not */
-#ifndef CONFIG_EXAMPLE_A2DP_SINK_OUTPUT_INTERNAL_DAC
 i2s_chan_handle_t tx_chan = NULL;
-#else
-dac_continuous_handle_t tx_chan;
-#endif
 
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-static bool cover_art_connected = false;
-static bool cover_art_getting = false;
-static uint32_t cover_art_image_size = 0;
-static uint8_t image_handle_old[7];
-#endif
 
 /********************************
  * STATIC FUNCTION DEFINITIONS
@@ -114,17 +95,6 @@ static void bt_app_alloc_meta_buffer(esp_avrc_ct_cb_param_t *param)
     rc->meta_rsp.attr_text = attr_text;
 }
 
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-static bool image_handle_check(uint8_t *image_handle, int len)
-{
-    /* Image handle length must be 7 */
-    if (len == 7 && memcmp(image_handle_old, image_handle, 7) != 0) {
-        memcpy(image_handle_old, image_handle, 7);
-        return true;
-    }
-    return false;
-}
-#endif
 
 static void bt_av_new_track(void)
 {
@@ -133,11 +103,7 @@ static void bt_av_new_track(void)
                         ESP_AVRC_MD_ATTR_ARTIST |
                         ESP_AVRC_MD_ATTR_ALBUM |
                         ESP_AVRC_MD_ATTR_GENRE;
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-    if (cover_art_connected) {
-        attr_mask |= ESP_AVRC_MD_ATTR_COVER_ART;
-    }
-#endif
+
     esp_avrc_ct_send_metadata_cmd(APP_RC_CT_TL_GET_META_DATA, attr_mask);
 
     /* register notification if peer support the event_id */
@@ -194,25 +160,15 @@ static void bt_av_notify_evt_handler(uint8_t event_id, esp_avrc_rn_param_t *even
 
 void bt_i2s_driver_install(void)
 {
-#ifdef CONFIG_EXAMPLE_A2DP_SINK_OUTPUT_INTERNAL_DAC
-    dac_continuous_config_t cont_cfg = {
-        .chan_mask = DAC_CHANNEL_MASK_ALL,
-        .desc_num = 8,
-        .buf_size = 2048,
-        .freq_hz = 44100,
-        .offset = 127,
-        .clk_src = DAC_DIGI_CLK_SRC_DEFAULT,   // Using APLL as clock source to get a wider frequency range
-        .chan_mode = DAC_CHANNEL_MODE_ALTER,
-    };
-    /* Allocate continuous channels */
-    ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &tx_chan));
-    /* Enable the continuous channels */
-    ESP_ERROR_CHECK(dac_continuous_enable(tx_chan));
-#else
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
+    
+    // Start with default clock config, then override clk_src for ESP32
+    i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(44100);
+//    clk_cfg.clk_src = I2S_CLK_SRC_APLL;  // Enable APLL only on ESP32
+    
     i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(44100),
+        .clk_cfg = clk_cfg,
         .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
@@ -231,18 +187,12 @@ void bt_i2s_driver_install(void)
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_chan, NULL));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_chan, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
-#endif
 }
 
 void bt_i2s_driver_uninstall(void)
 {
-#ifdef CONFIG_EXAMPLE_A2DP_SINK_OUTPUT_INTERNAL_DAC
-    ESP_ERROR_CHECK(dac_continuous_disable(tx_chan));
-    ESP_ERROR_CHECK(dac_continuous_del_channels(tx_chan));
-#else
     ESP_ERROR_CHECK(i2s_channel_disable(tx_chan));
     ESP_ERROR_CHECK(i2s_del_channel(tx_chan));
-#endif
 }
 
 static void volume_set_by_controller(uint8_t volume)
@@ -254,34 +204,6 @@ static void volume_set_by_controller(uint8_t volume)
     _lock_release(&s_volume_lock);
 }
 
-static void volume_set_by_local_host(uint8_t volume)
-{
-    ESP_LOGI(BT_RC_TG_TAG, "Volume is set locally to: %"PRIu32"%%", (uint32_t)volume * 100 / 0x7f);
-    /* set the volume in protection of lock */
-    _lock_acquire(&s_volume_lock);
-    s_volume = volume;
-    _lock_release(&s_volume_lock);
-
-    /* send notification response to remote AVRCP controller */
-    if (s_volume_notify) {
-        esp_avrc_rn_param_t rn_param;
-        rn_param.volume = s_volume;
-        esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_VOLUME_CHANGE, ESP_AVRC_RN_RSP_CHANGED, &rn_param);
-        s_volume_notify = false;
-    }
-}
-
-static void volume_change_simulation(void *arg)
-{
-    ESP_LOGI(BT_RC_TG_TAG, "start volume change simulation");
-
-    for (;;) {
-        /* volume up locally every 10 seconds */
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
-        uint8_t volume = (s_volume + 5) & 0x7f;
-        volume_set_by_local_host(volume);
-    }
-}
 
 static void bt_av_hdl_a2d_evt(uint16_t event, void *p_param)
 {
@@ -338,30 +260,14 @@ static void bt_av_hdl_a2d_evt(uint16_t event, void *p_param)
             if (p_mcc->cie.sbc_info.ch_mode & ESP_A2D_SBC_CIE_CH_MODE_MONO) {
                 ch_count = 1;
             }
-        #ifdef CONFIG_EXAMPLE_A2DP_SINK_OUTPUT_INTERNAL_DAC
-            dac_continuous_disable(tx_chan);
-            dac_continuous_del_channels(tx_chan);
-            dac_continuous_config_t cont_cfg = {
-                .chan_mask = DAC_CHANNEL_MASK_ALL,
-                .desc_num = 8,
-                .buf_size = 2048,
-                .freq_hz = sample_rate,
-                .offset = 127,
-                .clk_src = DAC_DIGI_CLK_SRC_DEFAULT,   // Using APLL as clock source to get a wider frequency range
-                .chan_mode = (ch_count == 1) ? DAC_CHANNEL_MODE_SIMUL : DAC_CHANNEL_MODE_ALTER,
-            };
-            /* Allocate continuous channels */
-            dac_continuous_new_channels(&cont_cfg, &tx_chan);
-            /* Enable the continuous channels */
-            dac_continuous_enable(tx_chan);
-        #else
+
             i2s_channel_disable(tx_chan);
             i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
             i2s_std_slot_config_t slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, ch_count);
             i2s_channel_reconfig_std_clock(tx_chan, &clk_cfg);
             i2s_channel_reconfig_std_slot(tx_chan, &slot_cfg);
             i2s_channel_enable(tx_chan);
-        #endif
+
             ESP_LOGI(BT_AV_TAG, "Configure audio player: 0x%x-0x%x-0x%x-0x%x-0x%x-%d-%d",
                      p_mcc->cie.sbc_info.samp_freq,
                      p_mcc->cie.sbc_info.ch_mode,
@@ -462,15 +368,6 @@ static void bt_av_hdl_avrc_ct_evt(uint16_t event, void *p_param)
     /* when metadata response, this event comes */
     case ESP_AVRC_CT_METADATA_RSP_EVT: {
         ESP_LOGI(BT_RC_CT_TAG, "AVRC metadata rsp: attribute id 0x%x, %s", rc->meta_rsp.attr_id, rc->meta_rsp.attr_text);
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-        if(rc->meta_rsp.attr_id == 0x80 && cover_art_connected && cover_art_getting == false) {
-            /* check image handle is valid and different with last one, wo dont want to get an image repeatedly */
-            if(image_handle_check(rc->meta_rsp.attr_text, rc->meta_rsp.attr_length)) {
-                esp_avrc_ct_cover_art_get_linked_thumbnail(rc->meta_rsp.attr_text);
-                cover_art_getting = true;
-            }
-        }
-#endif
         free(rc->meta_rsp.attr_text);
         break;
     }
@@ -483,13 +380,6 @@ static void bt_av_hdl_avrc_ct_evt(uint16_t event, void *p_param)
     /* when feature of remote device indicated, this event comes */
     case ESP_AVRC_CT_REMOTE_FEATURES_EVT: {
         ESP_LOGI(BT_RC_CT_TAG, "AVRC remote features %"PRIx32", TG features %x", rc->rmt_feats.feat_mask, rc->rmt_feats.tg_feat_flag);
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-        if ((rc->rmt_feats.tg_feat_flag & ESP_AVRC_FEAT_FLAG_TG_COVER_ART) && !cover_art_connected) {
-            ESP_LOGW(BT_RC_CT_TAG, "Peer support Cover Art feature, start connection...");
-            /* set mtu to zero to use a default value */
-            esp_avrc_ct_cover_art_connect(0);
-        }
-#endif
         break;
     }
     /* when notification capability of peer device got, this event comes */
@@ -503,33 +393,9 @@ static void bt_av_hdl_avrc_ct_evt(uint16_t event, void *p_param)
         break;
     }
     case ESP_AVRC_CT_COVER_ART_STATE_EVT: {
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-        if (rc->cover_art_state.state == ESP_AVRC_COVER_ART_CONNECTED) {
-            cover_art_connected = true;
-            ESP_LOGW(BT_RC_CT_TAG, "Cover Art Client connected");
-        }
-        else {
-            cover_art_connected = false;
-            ESP_LOGW(BT_RC_CT_TAG, "Cover Art Client disconnected, reason:%d", rc->cover_art_state.reason);
-        }
-#endif
         break;
     }
     case ESP_AVRC_CT_COVER_ART_DATA_EVT: {
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-        /* when rc->cover_art_data.final is true, it means we have received the entire image or get operation failed */
-        if (rc->cover_art_data.final) {
-            if(rc->cover_art_data.status == ESP_BT_STATUS_SUCCESS) {
-                ESP_LOGI(BT_RC_CT_TAG, "Cover Art Client final data event, image size: %lu bytes", cover_art_image_size);
-            }
-            else {
-                ESP_LOGE(BT_RC_CT_TAG, "Cover Art Client get operation failed");
-            }
-            cover_art_image_size = 0;
-            /* set the getting state to false, we can get next image now */
-            cover_art_getting = false;
-        }
-#endif
         break;
     }
     /* when avrcp controller init or deinit completed, this event comes */
@@ -562,13 +428,13 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
         uint8_t *bda = rc->conn_stat.remote_bda;
         ESP_LOGI(BT_RC_TG_TAG, "AVRC conn_state evt: state %d, [%02x:%02x:%02x:%02x:%02x:%02x]",
                  rc->conn_stat.connected, bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
-        if (rc->conn_stat.connected) {
-            /* create task to simulate volume change */
-            xTaskCreate(volume_change_simulation, "vcsTask", 2048, NULL, 5, &s_vcs_task_hdl);
-        } else {
-            vTaskDelete(s_vcs_task_hdl);
-            ESP_LOGI(BT_RC_TG_TAG, "Stop volume change simulation");
-        }
+        //if (rc->conn_stat.connected) {
+        //    /* change led status? play sound? */
+        //    
+        //} else {
+        //    /* change led status? play sound? */
+        //    
+        //}
         break;
     }
     /* when passthrough commanded, this event comes */
@@ -640,8 +506,6 @@ void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
     }
 }
 
-#if CONFIG_EXAMPLE_A2DP_SINK_USE_EXTERNAL_CODEC == FALSE
-
 void bt_app_a2d_data_cb(const uint8_t *data, uint32_t len)
 {
     write_ringbuf(data, len);
@@ -652,31 +516,8 @@ void bt_app_a2d_data_cb(const uint8_t *data, uint32_t len)
     }
 }
 
-#else
-
-void bt_app_a2d_audio_data_cb(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_audio_buff_t *audio_buf)
-{
-    ESP_LOGI(BT_AV_TAG, "data_len: %d, number_frame: %d, ts: %lu", audio_buf->data_len, audio_buf->number_frame, audio_buf->timestamp);
-
-    /*
-     * Normally, user should send the audio_buf to other task, decode and free audio buff,
-     * But the codec component is not merge into IDF now, so we just free audio data here
-     */
-    esp_a2d_audio_buff_free(audio_buf);
-}
-
-#endif
-
 void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param)
 {
-#if CONFIG_EXAMPLE_AVRCP_CT_COVER_ART_ENABLE
-    /* we must handle ESP_AVRC_CT_COVER_ART_DATA_EVT in this callback, copy image data to other buff before return if need */
-    if (event == ESP_AVRC_CT_COVER_ART_DATA_EVT && param->cover_art_data.status == ESP_BT_STATUS_SUCCESS) {
-        cover_art_image_size += param->cover_art_data.data_len;
-        /* copy image data to other place */
-        /* memcpy(p_buf, param->cover_art_data.p_data, param->cover_art_data.data_len); */
-    }
-#endif
     switch (event) {
     case ESP_AVRC_CT_METADATA_RSP_EVT:
         bt_app_alloc_meta_buffer(param);
