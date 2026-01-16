@@ -21,7 +21,7 @@
 #define RINGBUF_HIGHEST_WATER_LEVEL    (32 * 1024)
 #define RINGBUF_PREFETCH_WATER_LEVEL   (20 * 1024)
 
-extern uint8_t s_volume;           /* defined in bt_app_av.c*/
+extern uint16_t s_volume;           /* defined in bt_app_av.c (0-65535) */
 
 
 enum {
@@ -128,22 +128,22 @@ static void bt_i2s_task_handler(void *arg)
                     break;
                 }
 
-                // === Apply volume to 16-bit stereo PCM samples ===
-                if (s_volume != 100) { // Skip if full volume
-                    int16_t *samples = (int16_t *)data;
-                    size_t sample_count = item_size / sizeof(int16_t);
+                // === Apply volume (0–65535) ===
+                if (s_volume != 65535) {
+                int16_t *samples = (int16_t *)data;
+                size_t n = item_size / sizeof(int16_t);
 
-                    for (size_t i = 0; i < sample_count; i++) {
-                        // Scale: (sample * volume) / 100
-                        int32_t scaled = ((int32_t)samples[i] * s_volume) / 100;
-                        // Clamp to 16-bit range
-                        if (scaled > 32767) {
-                            scaled = 32767;
-                        } else if (scaled < -32768) {
-                            scaled = -32768;
-                        }
-                        samples[i] = (int16_t)scaled;
+                for (size_t i = 0; i < n; i++) {
+                    int64_t scaled = (int64_t)samples[i] * s_volume;
+                    scaled >>= 16;  // divide by 65536
+
+                    if (scaled > 32767LL) {
+                        scaled = 32767LL;
+                    } else if (scaled < -32768LL) {
+                        scaled = -32768LL;
                     }
+
+                    samples[i] = (int16_t)scaled;
                 }
 
                 i2s_channel_write(tx_chan, data, item_size, &bytes_written, portMAX_DELAY);

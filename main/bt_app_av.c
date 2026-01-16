@@ -75,8 +75,7 @@ static const char *s_a2d_audio_state_str[] = {"Suspended", "Started"};
                                              /* audio stream datapath state in string */
 static esp_avrc_rn_evt_cap_mask_t s_avrc_peer_rn_cap;
                                              /* AVRC target notification capability bit mask */
-static _lock_t s_volume_lock;
-uint8_t s_volume = 0;                 /* local volume value */
+uint16_t s_volume = 1;                       /* local volume value */
 static bool s_volume_notify;                 /* notify volume change or not */
 i2s_chan_handle_t tx_chan = NULL;
 
@@ -162,11 +161,11 @@ void bt_i2s_driver_install(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
-    
+
     // Start with default clock config, then override clk_src for ESP32
     i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(44100);
 //    clk_cfg.clk_src = I2S_CLK_SRC_APLL;  // Enable APLL only on ESP32
-    
+
     i2s_std_config_t std_cfg = {
         .clk_cfg = clk_cfg,
         .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
@@ -197,11 +196,22 @@ void bt_i2s_driver_uninstall(void)
 
 static void volume_set_by_controller(uint8_t volume)
 {
-    ESP_LOGI(BT_RC_TG_TAG, "Volume is set by remote controller to: %"PRIu32"%%", (uint32_t)volume * 100 / 0x7f);
-    /* set the volume in protection of lock */
-    _lock_acquire(&s_volume_lock);
-    s_volume = volume;
-    _lock_release(&s_volume_lock);
+    uint32_t mapped;
+    if (volume == 0) {
+        mapped = 0;
+    } else {
+        // Compute v^3 * 65536 / 127^3
+        uint64_t temp = (uint64_t)volume * volume;  // v^2
+        temp = temp * volume;                       // v^3
+        temp = temp * 65536ULL;                     // scale to 2^16
+        temp = (temp + 1024191ULL) / 2048383ULL;   // +bias, divide by 127^3
+        if (temp > 65536) temp = 65536;
+        mapped = (uint32_t)(temp - 1);  // 0–65535
+    }
+
+    s_volume = (uint16_t)mapped;
+
+    ESP_LOGI(BT_RC_TG_TAG, "Volume set by remote to %u, mapped volume: %u", volume, s_volume);
 }
 
 
@@ -430,10 +440,10 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
                  rc->conn_stat.connected, bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
         //if (rc->conn_stat.connected) {
         //    /* change led status? play sound? */
-        //    
+        //
         //} else {
         //    /* change led status? play sound? */
-        //    
+        //
         //}
         break;
     }
