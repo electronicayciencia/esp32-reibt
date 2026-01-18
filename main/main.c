@@ -25,6 +25,10 @@
 #include "esp_a2dp_api.h"
 #include "esp_avrc_api.h"
 
+#include "sdkconfig.h"
+#include "util.h"
+
+
 /* device name */
 static const char local_device_name[] = CONFIG_EXAMPLE_LOCAL_DEVICE_NAME;
 
@@ -47,17 +51,6 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param);
 /*******************************
  * STATIC FUNCTION DEFINITIONS
  ******************************/
-static char *bda2str(uint8_t * bda, char *str, size_t size)
-{
-    if (bda == NULL || str == NULL || size < 18) {
-        return NULL;
-    }
-
-    uint8_t *p = bda;
-    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
-            p[0], p[1], p[2], p[3], p[4], p[5]);
-    return str;
-}
 
 static void bt_app_dev_cb(esp_bt_dev_cb_event_t event, esp_bt_dev_cb_param_t *param)
 {
@@ -209,14 +202,12 @@ void app_main(void)
         return;
     }
 
-    /* set default parameters for Legacy Pairing (use fixed pin code 1234) */
+    /* set default parameters for Legacy Pairing (fixed pin code defined in menuconfig) */
     esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;
-    esp_bt_pin_code_t pin_code;
-    pin_code[0] = '1';
-    pin_code[1] = '2';
-    pin_code[2] = '3';
-    pin_code[3] = '4';
-    esp_bt_gap_set_pin(pin_type, 4, pin_code);
+    esp_bt_pin_code_t pin_code = {0};
+    memcpy(pin_code, CONFIG_ESPBT_FIXED_PIN, strlen(CONFIG_ESPBT_FIXED_PIN));
+    esp_bt_gap_set_pin(pin_type, strlen(CONFIG_ESPBT_FIXED_PIN), pin_code);
+    ESP_LOGI(BT_AV_TAG, "Bluetooth PIN set to: %s", CONFIG_ESPBT_FIXED_PIN); 
 
     ESP_LOGI(BT_AV_TAG, "Own address:[%s]", bda2str((uint8_t *)esp_bt_dev_get_address(), bda_str, sizeof(bda_str)));
     bt_app_task_start_up();

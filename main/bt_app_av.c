@@ -25,6 +25,8 @@
 
 #include "sys/lock.h"
 
+#include "volume.h"
+
 /* AVRCP used transaction labels */
 #define APP_RC_CT_TL_GET_CAPS            (0)
 #define APP_RC_CT_TL_GET_META_DATA       (1)
@@ -66,7 +68,6 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param);
  * STATIC VARIABLE DEFINITIONS
  ******************************/
 
-static uint32_t s_pkt_cnt = 0;               /* count for audio packet */
 static esp_a2d_audio_state_t s_audio_state = ESP_A2D_AUDIO_STATE_STOPPED;
                                              /* audio stream datapath state */
 static const char *s_a2d_conn_state_str[] = {"Disconnected", "Connecting", "Connected", "Disconnecting"};
@@ -79,6 +80,11 @@ uint16_t s_volume = 1;                       /* local volume value */
 static bool s_volume_notify;                 /* notify volume change or not */
 i2s_chan_handle_t tx_chan = NULL;
 
+/* bt_app_a2d_data_cb packet statistics */
+static uint32_t s_pkt_cnt = 0;               /* count for audio packet */
+static int16_t s_min_sample = INT16_MAX;
+static int16_t s_max_sample = INT16_MIN;
+static uint32_t s_total_bytes = 0;
 
 /********************************
  * STATIC FUNCTION DEFINITIONS
@@ -196,21 +202,7 @@ void bt_i2s_driver_uninstall(void)
 
 static void volume_set_by_controller(uint8_t volume)
 {
-    uint32_t mapped;
-    if (volume == 0) {
-        mapped = 0;
-    } else {
-        // Compute v^3 * 65536 / 127^3
-        uint64_t temp = (uint64_t)volume * volume;  // v^2
-        temp = temp * volume;                       // v^3
-        temp = temp * 65536ULL;                     // scale to 2^16
-        temp = (temp + 1024191ULL) / 2048383ULL;   // +bias, divide by 127^3
-        if (temp > 65536) temp = 65536;
-        mapped = (uint32_t)(temp - 1);  // 0–65535
-    }
-
-    s_volume = (uint16_t)mapped;
-
+    s_volume = interpolate_volume(volume);
     ESP_LOGI(BT_RC_TG_TAG, "Volume set by remote to %u, mapped volume: %u", volume, s_volume);
 }
 
@@ -454,7 +446,7 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
     }
     /* when absolute volume command from remote device set, this event comes */
     case ESP_AVRC_TG_SET_ABSOLUTE_VOLUME_CMD_EVT: {
-        ESP_LOGI(BT_RC_TG_TAG, "AVRC set absolute volume: %d%%", (int)rc->set_abs_vol.volume * 100 / 0x7f);
+        ESP_LOGI(BT_RC_TG_TAG, "AVRC set absolute volume: %d/127", (int)rc->set_abs_vol.volume);
         volume_set_by_controller(rc->set_abs_vol.volume);
         break;
     }
@@ -520,9 +512,36 @@ void bt_app_a2d_data_cb(const uint8_t *data, uint32_t len)
 {
     write_ringbuf(data, len);
 
-    /* log the number every 100 packets */
+    // Update min/max and total bytes for this packet
+    if (len > 0) {
+        const int16_t *samples = (const int16_t *)data;
+        uint32_t num_samples = len / sizeof(int16_t); // assumes 16-bit
+
+        for (uint32_t i = 0; i < num_samples; i++) {
+            int16_t sample = samples[i];
+            if (sample < s_min_sample) s_min_sample = sample;
+            if (sample > s_max_sample) s_max_sample = sample;
+        }
+
+        s_total_bytes += len;
+    }
+
+    /* Log every 100 packets */
     if (++s_pkt_cnt % 100 == 0) {
-        ESP_LOGI(BT_AV_TAG, "Audio packet count: %"PRIu32, s_pkt_cnt);
+        ESP_LOGI(BT_AV_TAG,
+                 "Packets: %"PRIu32", "
+                 "Bytes: %"PRIu32", "
+                 "Min: %"PRId16", "
+                 "Max: %"PRId16,
+                 s_pkt_cnt,
+                 s_total_bytes,
+                 s_min_sample,
+                 s_max_sample);
+
+        // Reset stats for next batch
+        s_min_sample = INT16_MAX;
+        s_max_sample = INT16_MIN;
+        s_total_bytes = 0;
     }
 }
 

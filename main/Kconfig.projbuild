@@ -23,4 +23,10 @@ menu "A2DP Example Configuration"
         help
             Use this option to set local device name.
 
+    config ESPBT_FIXED_PIN
+        string "Fixed PIN for Bluetooth Pairing"
+        default "1234"
+        help
+            Enter a numeric PIN code (1 to 16 digits) for Bluetooth pairing.
+            Only digits 0-9 are allowed.
 endmenu
