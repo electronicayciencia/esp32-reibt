@@ -1,52 +1,57 @@
 | Supported Targets | ESP32 |
 | ----------------- | ----- |
 
-A2DP-SINK
-=========
+# REI-BT - Smart ESP32 A2DP Sink
 
-Example of A2DP audio sink role
+A Bluetooth A2DP audio receiver using the ESP32 and PCM5102 DAC, designed for clean audio playback with user-friendly features:
 
-This is the example of API implementing Advanced Audio Distribution Profile to receive an audio stream.
+- Silent pairing: No audio on Bluetooth pairing.
+- Logarithmic volume control: Natural volume steps.
+- Auto-reconnect: Automatically reconnects to the last paired device on boot.
+- I2S output to PCM5102 DAC (supports 44.1kHz, 16-bit stereo).
+- No buttons, no LEDs. Suitable for embedding.
+- Custom Bluetooth name.
 
-This example involves the use of Bluetooth legacy profile A2DP for audio stream reception, AVRCP for media information notifications, and I2S for audio stream output interface.
+## Hardware Requirements
 
-Applications such as bluetooth speakers can take advantage of this example as a reference of basic functionalities.
+- ESP32 development board
+- PCM5102 DAC module
+- Optional: push button for manual disconnect / reset pairing
 
-## How to use this example
+### Wiring (I2S to PCM5102)
 
-### Hardware Required
+| ESP32 Pin | PCM5102 Signal |
+|----------|----------------|
+| GPIO16   | LRCK (LRC)     |
+| GPIO17   | DIN (DATA)     |
+| GPIO21   | BCLK (SCK)     |
 
-### Configure the project
+PCM5102 FMT is I2S.
 
-```
-idf-py set-target esp32
+All pins are in a row.
+
+## Build & Flash
+
+```bash
+idf.py set-target esp32
 idf.py menuconfig
-idf.py build
 idf.py flash monitor
 ```
 
-* Configure the output PINs under A2DP Example Configuration
+ESP-IDF v5.5.2
 
-## Example Output
+## Configuration
 
-After the program is started, the example starts inquiry scan and page scan, awaiting being discovered and connected. Other bluetooth devices such as smart phones can discover a device named "ESP_SPEAKER". A smartphone or another ESP-IDF example of A2DP source can be used to connect to the local device.
+All settings are in `menuconfig`.
 
-Once A2DP connection is set up, there will be a notification message with the remote device's bluetooth MAC address like the following:
 
-```
-I (106427) BT_AV: A2DP connection state: Connected, [64:a2:f9:69:57:a4]
-```
+## License
 
-If a smartphone is used to connect to local device, starting to play music with an APP will result in the transmission of audio stream. The transmitting of audio stream will be visible in the application log including a count of audio data packets, like this:
+MIT License - see LICENSE
 
-```
-I (120627) BT_AV: A2DP audio state: Started
-I (122697) BT_AV: Audio packet count 100
-I (124697) BT_AV: Audio packet count 200
-I (126697) BT_AV: Audio packet count 300
-I (128697) BT_AV: Audio packet count 400
-```
+## Acknowledgements
 
-## Troubleshooting
-* For current stage, the supported audio codec in ESP32 A2DP is SBC. SBC data stream is transmitted to A2DP sink and then decoded into PCM samples as output. The PCM data format is normally of 44.1kHz sampling rate, two-channel 16-bit sample stream. Other SBC configurations in ESP32 A2DP sink is supported but need additional modifications of protocol stack settings.
-* As a usage limitation, ESP32 A2DP sink can support at most one connection with remote A2DP source devices. Also, A2DP sink cannot be used together with A2DP source at the same time, but can be used with other profiles such as SPP and HFP.
+- ESP-IDF Bluetooth A2DP Sink example.
+- PCM5102 datasheet.
+- Qwen IA.
+
