@@ -27,6 +27,8 @@
 
 #include "sdkconfig.h"
 #include "util.h"
+#include "reconnect.h"
+
 
 
 /* device name */
@@ -108,8 +110,21 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
     /* when ACL disconnection completed, this event comes */
     case ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT:
         bda = (uint8_t *)param->acl_disconn_cmpl_stat.bda;
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_ACL_DISC_CMPL_STAT_EVT Disconnected from [%02x:%02x:%02x:%02x:%02x:%02x], reason: 0x%x",
-                 bda[0], bda[1], bda[2], bda[3], bda[4], bda[5], param->acl_disconn_cmpl_stat.reason);
+        uint8_t reason = param->acl_disconn_cmpl_stat.reason & 0x1F; // Use only lower 5 bits (valid HCI reasons)
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_ACL_DISC_CMPL_STAT_EVT Disconnected from [%02x:%02x:%02x:%02x:%02x:%02x], reason: 0x%02x",
+                 bda[0], bda[1], bda[2], bda[3], bda[4], bda[5], reason);
+
+        // Only remove candidate if NOT due to these "benign" reasons:
+        // - Connection Timeout (0x08)
+        // - Remote Device Terminated due to Power Off (0x15)
+        bool is_benign_disconnect = 
+            (reason == 0x08) ||  // Connection timeout
+            (reason == 0x15);    // Remote device powered off
+
+        if (!is_benign_disconnect) {
+            bt_reconnect_remove_candidate(bda);
+        }
+        bt_reconnect_start_task();
         break;
     /* others */
     default: {
@@ -207,10 +222,12 @@ void app_main(void)
     esp_bt_pin_code_t pin_code = {0};
     memcpy(pin_code, CONFIG_ESPBT_FIXED_PIN, strlen(CONFIG_ESPBT_FIXED_PIN));
     esp_bt_gap_set_pin(pin_type, strlen(CONFIG_ESPBT_FIXED_PIN), pin_code);
-    ESP_LOGI(BT_AV_TAG, "Bluetooth PIN set to: %s", CONFIG_ESPBT_FIXED_PIN); 
+    ESP_LOGI(BT_AV_TAG, "Bluetooth PIN set to: %s", CONFIG_ESPBT_FIXED_PIN);
 
     ESP_LOGI(BT_AV_TAG, "Own address:[%s]", bda2str((uint8_t *)esp_bt_dev_get_address(), bda_str, sizeof(bda_str)));
     bt_app_task_start_up();
     /* bluetooth device name, connection mode and profile set up */
     bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);
+
+    bt_reconnect_start_task();
 }

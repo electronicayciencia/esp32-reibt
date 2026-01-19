@@ -26,6 +26,7 @@
 #include "sys/lock.h"
 
 #include "volume.h"
+#include "reconnect.h"
 
 /* AVRCP used transaction labels */
 #define APP_RC_CT_TL_GET_CAPS            (0)
@@ -36,6 +37,12 @@
 
 /* Application layer causes delay value */
 #define APP_DELAY_VALUE                  50  // 5ms
+
+/*******************************
+ * GLOBAL VARIABLE DECLARATIONS
+ ******************************/
+
+esp_a2d_connection_state_t s_connection_state = ESP_A2D_CONNECTION_STATE_DISCONNECTED;
 
 /*******************************
  * STATIC FUNCTION DECLARATIONS
@@ -220,12 +227,14 @@ static void bt_av_hdl_a2d_evt(uint16_t event, void *p_param)
         uint8_t *bda = a2d->conn_stat.remote_bda;
         ESP_LOGI(BT_AV_TAG, "A2DP connection state: %s, [%02x:%02x:%02x:%02x:%02x:%02x]",
             s_a2d_conn_state_str[a2d->conn_stat.state], bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
+        s_connection_state = a2d->conn_stat.state;
         if (a2d->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
             bt_i2s_driver_uninstall();
             bt_i2s_task_shut_down();
         } else if (a2d->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED){
             esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+            bt_reconnect_add_candidate(bda);
             bt_i2s_task_start_up();
         } else if (a2d->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTING) {
             bt_i2s_driver_install();

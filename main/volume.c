@@ -12,7 +12,6 @@ static const uint16_t log_volume_map[16] = {
     6800, 9100, 12000, 15700, 20400, 26500, 35000, 65535
 };
 
-// Only define if used — ensure it's called!
 uint16_t interpolate_volume(uint8_t volume)
 {
     if (volume == 0) {
