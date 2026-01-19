@@ -26,9 +26,7 @@
 #include "esp_avrc_api.h"
 
 #include "sdkconfig.h"
-#include "util.h"
 #include "reconnect.h"
-
 
 
 /* device name */
@@ -181,7 +179,6 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
 
 void app_main(void)
 {
-    char bda_str[18] = {0};
     /* initialize NVS — it is used to store PHY calibration data */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -225,7 +222,6 @@ void app_main(void)
     esp_bt_gap_set_pin(pin_type, strlen(CONFIG_REIBT_FIXED_PIN), pin_code);
     ESP_LOGI(BT_AV_TAG, "Bluetooth PIN set to: %s", CONFIG_REIBT_FIXED_PIN);
 
-    ESP_LOGI(BT_AV_TAG, "Own address:[%s]", bda2str((uint8_t *)esp_bt_dev_get_address(), bda_str, sizeof(bda_str)));
     bt_app_task_start_up();
     /* bluetooth device name, connection mode and profile set up */
     bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);

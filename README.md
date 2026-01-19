@@ -1,9 +1,9 @@
 | Supported Targets | ESP32 |
 | ----------------- | ----- |
 
-# REI-BT - Smart ESP32 A2DP Sink
+# REI-BT - Custom ESP32 A2DP Sink
 
-A Bluetooth A2DP audio receiver using the ESP32 and PCM5102 DAC, designed for clean audio playback with user-friendly features:
+A Bluetooth A2DP audio receiver using the ESP32 and PCM5102 DAC:
 
 - Silent pairing: No audio on Bluetooth pairing.
 - Logarithmic volume control: Natural volume steps.
