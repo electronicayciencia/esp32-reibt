@@ -1,29 +1,29 @@
-menu "A2DP Example Configuration"
-    config EXAMPLE_I2S_LRCK_PIN
+menu "REIBT A2DP Configuration"
+    config REIBT_I2S_LRCK_PIN
         int "I2S LRCK (WSEL) GPIO"
         default 16
         help
             GPIO number to use for I2S LRCK(WS) Driver.
 
-    config EXAMPLE_I2S_DATA_PIN
+    config REIBT_I2S_DATA_PIN
         int "I2S DATA (DIN) GPIO"
         default 17
         help
             GPIO number to use for I2S Data Driver.
 
-    config EXAMPLE_I2S_BCK_PIN
+    config REIBT_I2S_BCK_PIN
         int "I2S BCK (BLCK) GPIO"
         default 21
         help
             GPIO number to use for I2S BCK Driver.
 
-    config EXAMPLE_LOCAL_DEVICE_NAME
+    config REIBT_LOCAL_DEVICE_NAME
         string "Local Device Name"
-        default "ESP_BT"
+        default "REI-BT"
         help
             Use this option to set local device name.
 
-    config ESPBT_FIXED_PIN
+    config REIBT_FIXED_PIN
         string "Fixed PIN for Bluetooth Pairing"
         default "1234"
         help

@@ -32,7 +32,7 @@
 
 
 /* device name */
-static const char local_device_name[] = CONFIG_EXAMPLE_LOCAL_DEVICE_NAME;
+static const char local_device_name[] = CONFIG_REIBT_LOCAL_DEVICE_NAME;
 
 /* event for stack up */
 enum {
@@ -221,9 +221,9 @@ void app_main(void)
     /* set default parameters for Legacy Pairing (fixed pin code defined in menuconfig) */
     esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;
     esp_bt_pin_code_t pin_code = {0};
-    memcpy(pin_code, CONFIG_ESPBT_FIXED_PIN, strlen(CONFIG_ESPBT_FIXED_PIN));
-    esp_bt_gap_set_pin(pin_type, strlen(CONFIG_ESPBT_FIXED_PIN), pin_code);
-    ESP_LOGI(BT_AV_TAG, "Bluetooth PIN set to: %s", CONFIG_ESPBT_FIXED_PIN);
+    memcpy(pin_code, CONFIG_REIBT_FIXED_PIN, strlen(CONFIG_REIBT_FIXED_PIN));
+    esp_bt_gap_set_pin(pin_type, strlen(CONFIG_REIBT_FIXED_PIN), pin_code);
+    ESP_LOGI(BT_AV_TAG, "Bluetooth PIN set to: %s", CONFIG_REIBT_FIXED_PIN);
 
     ESP_LOGI(BT_AV_TAG, "Own address:[%s]", bda2str((uint8_t *)esp_bt_dev_get_address(), bda_str, sizeof(bda_str)));
     bt_app_task_start_up();
