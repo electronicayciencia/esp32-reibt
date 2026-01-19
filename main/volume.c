@@ -6,10 +6,25 @@ static const uint8_t avrcp_volume_steps[16] = {
     68, 77, 85, 94, 102, 111, 119, 127
 };
 
-// Precomputed log-mapped output (0 to 65535)
+// Smooth logarithmic volume mapping for 16-step AVRCP
+// Ensures perceptually linear volume changes
 static const uint16_t log_volume_map[16] = {
-    0, 300, 650, 1100, 1700, 2500, 3600, 5000,
-    6800, 9100, 12000, 15700, 20400, 26500, 35000, 65535
+    0,      // 0
+    220,    // 1
+    490,    // 2
+    870,    // 3
+    1420,   // 4
+    2200,   // 5
+    3300,   // 6
+    4850,   // 7
+    6950,   // 8
+    9800,   // 9
+    13600,  // 10
+    18600,  // 11
+    25200,  // 12
+    33900,  // 13
+    45500,  // 14
+    65535   // 15
 };
 
 uint16_t interpolate_volume(uint8_t volume)

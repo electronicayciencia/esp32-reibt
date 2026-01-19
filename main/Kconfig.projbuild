@@ -1,4 +1,4 @@
-menu "REIBT A2DP Configuration"
+menu "REI-BT Configuration"
     config REIBT_I2S_LRCK_PIN
         int "I2S LRCK (WSEL) GPIO"
         default 16
