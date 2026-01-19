@@ -1,11 +1,15 @@
+/*
+New reconnect logic:
+ - Only at startup
+ - Only with the last known device
+ - Only if the disconnection was due to own poweroff or timeout.
+*/
 #include "reconnect.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_bt.h"
 #include "esp_log.h"
 #include "esp_gap_bt_api.h"
-//#include "esp_a2dp_api.h"
-//#include "esp_avrc_api.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "bt_app_av.h"  // for s_connection_state
@@ -13,6 +17,7 @@
 static const char *TAG = "reconnect";
 
 #define NVS_BT_NAMESPACE "bt_rec"
+#define LAST_BDA_KEY     "last_bda"
 
 // Convert BDA to null-terminated hex string (lowercase)
 static void bda_to_str(const uint8_t *bda, char *str) {
@@ -52,19 +57,18 @@ static bool is_bda_bonded(const uint8_t *bda) {
     return found;
 }
 
-// Attempt to reconnect to a single BDA (blocking, up to 5 seconds)
+// Attempt to reconnect to a single BDA (blocking)
 static bool try_reconnect_bda(const uint8_t *bda) {
     ESP_LOGI(TAG, "Attempting reconnect to " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
 
-    // In A2DP sink, reconnection is typically initiated by the source.
-    // However, we can trigger ACL connection to prompt the source.
     esp_err_t ret = esp_a2d_sink_connect((uint8_t *)bda);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "esp_a2d_sink_connect failed: %d", ret);
         return false;
     }
 
-    // Wait until something happens
+    // Wait for connection state change
+    // todo: can wait forever
     while (s_connection_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
@@ -74,19 +78,22 @@ static bool try_reconnect_bda(const uint8_t *bda) {
             ESP_LOGI(TAG, "Connected to " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
             return true;
         } else if (s_connection_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
-            ESP_LOGI(TAG, "Can't connect to " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
+            ESP_LOGI(TAG, "Failed to connect to " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
             return false;
-        } else {
-            ESP_LOGI(TAG, "Waiting for " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
         }
-
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
-// Reconnect task
+// Reconnect task: only tries the last known device
 static void reconnect_task(void *arg) {
     ESP_LOGI(TAG, "Starting reconnect task");
+
+    if (s_connection_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+        ESP_LOGI(TAG, "Already connected, skipping reconnect");
+        vTaskDelete(NULL);
+        return;
+    }
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_BT_NAMESPACE, NVS_READWRITE, &handle);
@@ -96,106 +103,69 @@ static void reconnect_task(void *arg) {
         return;
     }
 
-    // Only run if currently disconnected
-    if (s_connection_state != ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
-        ESP_LOGI(TAG, "Already connected, skipping reconnect");
+    size_t len = 13; // 12 chars + null terminator
+    char bda_str[13];
+    err = nvs_get_str(handle, LAST_BDA_KEY, bda_str, &len);
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG, "No last known device in NVS");
         nvs_close(handle);
         vTaskDelete(NULL);
         return;
     }
 
-    // loop until it connects
-    while (s_connection_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+    uint8_t bda[ESP_BD_ADDR_LEN];
+    str_to_bda(bda_str, bda);
 
-        // Iterate all keys in namespace
-        nvs_iterator_t it = NULL;
-        uint8_t candidates = 0;
-        esp_err_t res = nvs_entry_find("nvs", NVS_BT_NAMESPACE, NVS_TYPE_ANY, &it);
-        while (res == ESP_OK && s_connection_state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
-            bool delete_candidate = false;
-            candidates++;
-
-            nvs_entry_info_t info;
-            nvs_entry_info(it, &info);
-
-            // Key name is BDA hex string
-            uint8_t bda[ESP_BD_ADDR_LEN];
-            str_to_bda(info.key, bda);
-
-            // Check if still bonded
-            ESP_LOGI(TAG, "Candidate: %s", info.key);
-            if (!is_bda_bonded(bda)) {
-                ESP_LOGI(TAG, "Removing unbonded candidate: %s", info.key);
-                delete_candidate = true;
-            } else {
-                // Try to reconnect
-                if (try_reconnect_bda(bda)) {
-                    // Success! Exit loop
-                    break;
-                }
-                // Continue to next candidate
-            }
-
-            res = nvs_entry_next(&it);
-
-            if (delete_candidate) {
-                bt_reconnect_remove_candidate(bda);
-            }
-            
-            // Wait for any client to connect to us
-            vTaskDelay(pdMS_TO_TICKS(5000));
-        }
-        nvs_release_iterator(it);
-
-        if (candidates == 0) {
-            ESP_LOGI(TAG, "No candidates. Reconnect task finished");
-            vTaskDelete(NULL);            
-        }
-
-        // Next try for all
-        ESP_LOGI(TAG, "No more candidates to try");
-        vTaskDelay(pdMS_TO_TICKS(10000));
+    // Validate bonding
+    if (!is_bda_bonded(bda)) {
+        ESP_LOGI(TAG, "Last device no longer bonded. Removing.");
+        nvs_erase_key(handle, LAST_BDA_KEY);
+        nvs_commit(handle);
+        nvs_close(handle);
+        vTaskDelete(NULL);
+        return;
     }
+
     nvs_close(handle);
 
-    ESP_LOGI(TAG, "Reconnect task finished");
+    // Try to reconnect
+    if (try_reconnect_bda(bda)) {
+        ESP_LOGI(TAG, "Reconnect succeeded");
+    } else {
+        ESP_LOGW(TAG, "Reconnect failed");
+    }
+
     vTaskDelete(NULL);
 }
 
-// Public API implementations
-
+// Public API: store ONLY the last connected device
 esp_err_t bt_reconnect_add_candidate(const uint8_t *bda) {
     if (!bda) return ESP_ERR_INVALID_ARG;
 
-    char key[13]; // 12 hex chars + null
-    bda_to_str(bda, key);
-
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_BT_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: %d", err);
         return err;
     }
-
-    // Store dummy value (1). Key name is the BDA.
-    err = nvs_set_i8(handle, key, 1);
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-        ESP_LOGI(TAG, "Added reconnect candidate: %s", key);
-    } else {
-        ESP_LOGE(TAG, "Failed to store candidate %s: %d", key, err);
-    }
-
-    nvs_close(handle);
-    return err;
-}
-
-esp_err_t bt_reconnect_remove_candidate(const uint8_t *bda) {
-    if (!bda) return ESP_ERR_INVALID_ARG;
 
     char key[13];
     bda_to_str(bda, key);
+    err = nvs_set_str(handle, LAST_BDA_KEY, key);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+        ESP_LOGI(TAG, "Saved last known device: %s", key);
+    } else {
+        ESP_LOGE(TAG, "Failed to save last device: %d", err);
+    }
 
+    nvs_close(handle);
+    return err;
+}
+
+// Public API: remove last known device
+esp_err_t bt_reconnect_remove_candidate(const uint8_t *bda) {
+    // We ignore 'bda' -- we only track one device
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_BT_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
@@ -203,21 +173,22 @@ esp_err_t bt_reconnect_remove_candidate(const uint8_t *bda) {
         return err;
     }
 
-    err = nvs_erase_key(handle, key);
+    err = nvs_erase_key(handle, LAST_BDA_KEY);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-        err = ESP_OK; // Not an error if not present
+        err = ESP_OK;
     } else if (err == ESP_OK) {
         nvs_commit(handle);
-        ESP_LOGI(TAG, "Removed reconnect candidate: %s", key);
+        ESP_LOGI(TAG, "Removed last known device");
     } else {
-        ESP_LOGE(TAG, "Failed to remove candidate %s: %d", key, err);
+        ESP_LOGE(TAG, "Failed to remove last device: %d", err);
     }
 
     nvs_close(handle);
     return err;
 }
 
+// Start reconnect task
 esp_err_t bt_reconnect_start_task(void) {
-    esp_err_t err = xTaskCreate(reconnect_task, "reconnect_task", 3072, NULL, tskIDLE_PRIORITY + 2, NULL);
-    return err;
+    BaseType_t ret = xTaskCreate(reconnect_task, "reconnect_task", 3072, NULL, tskIDLE_PRIORITY + 2, NULL);
+    return (ret == pdPASS) ? ESP_OK : ESP_FAIL;
 }

@@ -121,10 +121,11 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
             (reason == 0x08) ||  // Connection timeout
             (reason == 0x15);    // Remote device powered off
 
-        if (!is_benign_disconnect) {
+        if (is_benign_disconnect) {
+            bt_reconnect_start_task();
+        } else {
             bt_reconnect_remove_candidate(bda);
         }
-        bt_reconnect_start_task();
         break;
     /* others */
     default: {
@@ -229,5 +230,9 @@ void app_main(void)
     /* bluetooth device name, connection mode and profile set up */
     bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);
 
+    /* 
+    If reboot, wait 5s before reconnect to give time to the source to drop the active connection.
+    */
+    vTaskDelay(pdMS_TO_TICKS(5000));
     bt_reconnect_start_task();
 }
