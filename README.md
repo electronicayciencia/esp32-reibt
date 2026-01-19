@@ -16,7 +16,6 @@ A Bluetooth A2DP audio receiver using the ESP32 and PCM5102 DAC, designed for cl
 
 - ESP32 development board
 - PCM5102 DAC module
-- Optional: push button for manual disconnect / reset pairing
 
 ### Wiring (I2S to PCM5102)
 
